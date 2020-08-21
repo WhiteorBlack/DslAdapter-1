@@ -1,6 +1,5 @@
 package com.angcyo.dsladapter
 
-import android.animation.Animator
 import android.graphics.Color
 import android.view.View
 import android.view.ViewGroup
@@ -52,6 +51,79 @@ fun DslAdapter.findItemByTag(
     }
 }
 
+fun DslAdapter.findItemByGroup(
+    groups: List<String>,
+    useFilterList: Boolean = true
+): List<DslAdapterItem> {
+    return getDataList(useFilterList).findItemByGroup(groups)
+}
+
+/**通过Tag查找item*/
+fun List<DslAdapterItem>.findItemByTag(tag: String?): DslAdapterItem? {
+    if (tag == null) {
+        return null
+    }
+    return find {
+        it.itemTag == tag
+    }
+}
+
+/**通过group查找item*/
+fun List<DslAdapterItem>.findItemByGroup(groups: List<String>): List<DslAdapterItem> {
+    val result = mutableListOf<DslAdapterItem>()
+
+    groups.forEach { group ->
+        forEach {
+            if (it.itemGroups.contains(group)) {
+                result.add(it)
+            }
+        }
+    }
+    return result
+}
+
+/**返回[position]对应的item集合.[dataItems] [headerItems] [footerItems]*/
+fun DslAdapter.getItemListByPosition(position: Int): List<DslAdapterItem>? {
+    return when {
+        position in headerItems.indices -> headerItems
+        position - headerItems.size in dataItems.indices -> dataItems
+        position - headerItems.size - dataItems.size in footerItems.indices -> footerItems
+        else -> null
+    }
+}
+
+fun DslAdapter.getItemListByItem(item: DslAdapterItem?): List<DslAdapterItem>? {
+    return when {
+        item == null -> null
+        headerItems.contains(item) -> headerItems
+        dataItems.contains(item) -> dataItems
+        footerItems.contains(item) -> footerItems
+        else -> null
+    }
+}
+
+/**返回对应的集合, 和在集合中的索引*/
+fun DslAdapter.getItemListPairByPosition(position: Int): Pair<MutableList<DslAdapterItem>?, Int> {
+    val hSize = headerItems.size
+    val dSize = dataItems.size
+    return when {
+        position in headerItems.indices -> headerItems to position
+        position - hSize in dataItems.indices -> dataItems to (position - hSize)
+        position - hSize - dSize in footerItems.indices -> footerItems to (position - hSize - dSize)
+        else -> null to -1
+    }
+}
+
+fun DslAdapter.getItemListPairByItem(item: DslAdapterItem?): Pair<MutableList<DslAdapterItem>?, Int> {
+    return when {
+        item == null -> null to -1
+        headerItems.contains(item) -> headerItems to headerItems.indexOf(item)
+        dataItems.contains(item) -> dataItems to dataItems.indexOf(item)
+        footerItems.contains(item) -> footerItems to footerItems.indexOf(item)
+        else -> null to -1
+    }
+}
+
 fun DslAdapter.dslItem(@LayoutRes layoutId: Int, config: DslAdapterItem.() -> Unit = {}) {
     val item = DslAdapterItem()
     item.itemLayoutId = layoutId
@@ -84,7 +156,7 @@ fun DslAdapter.renderEmptyItem(
     adapterItem.itemLayoutId = R.layout.base_empty_item
     adapterItem.itemBindOverride = { itemHolder, _, _, _ ->
         itemHolder.itemView.setBackgroundColor(color)
-        itemHolder.itemView.setHeight(height)
+        itemHolder.itemView.setWidthHeight(-1, height)
     }
     adapterItem.action()
     addLastItem(adapterItem)
@@ -163,36 +235,58 @@ fun mediaPayload(): List<Int> =
 
 //<editor-fold desc="AdapterStatus">
 
-fun DslAdapter.toLoading(
-    filterParams: FilterParams = defaultFilterParams!!.apply {
-        justRun = true
-    }
-) {
+fun DslAdapter.adapterStatus() = dslAdapterStatusItem.itemState
+
+fun DslAdapter.isAdapterStatusLoading() =
+    dslAdapterStatusItem.itemState == DslAdapterStatusItem.ADAPTER_STATUS_LOADING
+
+fun DslAdapter.justRunFilterParams() = defaultFilterParams!!.apply {
+    justRun = true
+    asyncDiff = false
+}
+
+/**显示情感图[加载中]*/
+fun DslAdapter.toLoading(filterParams: FilterParams = justRunFilterParams()) {
     setAdapterStatus(DslAdapterStatusItem.ADAPTER_STATUS_LOADING, filterParams)
 }
 
-fun DslAdapter.toEmpty(
-    filterParams: FilterParams = defaultFilterParams!!.apply {
-        justRun = true
-    }
-) {
+/**显示情感图[空数据]*/
+fun DslAdapter.toEmpty(filterParams: FilterParams = justRunFilterParams()) {
     setAdapterStatus(DslAdapterStatusItem.ADAPTER_STATUS_EMPTY, filterParams)
 }
 
-fun DslAdapter.toError(
-    filterParams: FilterParams = defaultFilterParams!!.apply {
-        justRun = true
-    }
-) {
+/**显示情感图[错误]*/
+fun DslAdapter.toError(filterParams: FilterParams = justRunFilterParams()) {
     setAdapterStatus(DslAdapterStatusItem.ADAPTER_STATUS_ERROR, filterParams)
 }
 
-fun DslAdapter.toNone(
-    filterParams: FilterParams = defaultFilterParams!!.apply {
-        justRun = true
-    }
-) {
+/**显示情感图[正常]*/
+fun DslAdapter.toNone(filterParams: FilterParams = defaultFilterParams!!) {
     setAdapterStatus(DslAdapterStatusItem.ADAPTER_STATUS_NONE, filterParams)
+}
+
+fun DslAdapter.toLoadMoreError() {
+    setLoadMore(DslLoadMoreItem.LOAD_MORE_ERROR)
+}
+
+/**加载更多技术*/
+fun DslAdapter.toLoadMoreEnd() {
+    setLoadMore(DslLoadMoreItem.LOAD_MORE_NORMAL)
+}
+
+/**无更多*/
+fun DslAdapter.toLoadNoMore() {
+    setLoadMore(DslLoadMoreItem.LOAD_MORE_NO_MORE)
+}
+
+/**快速同时监听刷新/加载更多的回调*/
+fun DslAdapter.onRefreshOrLoadMore(action: (itemHolder: DslViewHolder, loadMore: Boolean) -> Unit) {
+    dslAdapterStatusItem.onRefresh = {
+        action(it, false)
+    }
+    dslLoadMoreItem.onLoadMore = {
+        action(it, true)
+    }
 }
 
 //</editor-fold desc="AdapterStatus">
@@ -200,14 +294,8 @@ fun DslAdapter.toNone(
 //<editor-fold desc="Update">
 
 /**立即更新*/
-fun DslAdapter.updateNow(
-    filterParams: FilterParams = FilterParams(
-        justRun = true,
-        asyncDiff = false
-    )
-) {
+fun DslAdapter.updateNow(filterParams: FilterParams = justRunFilterParams()) =
     updateItemDepend(filterParams)
-}
 
 /**延迟通知*/
 fun DslAdapter.delayNotify(filterParams: FilterParams = FilterParams(notifyDiffDelay = 300)) {
@@ -216,15 +304,7 @@ fun DslAdapter.delayNotify(filterParams: FilterParams = FilterParams(notifyDiffD
 
 //</editor-fold desc="Update">
 
-val RecyclerView.dslAdapter: DslAdapter? get() = adapter as? DslAdapter?
-
-fun View?.mH(def: Int = 0): Int {
-    return this?.measuredHeight ?: def
-}
-
-fun View?.mW(def: Int = 0): Int {
-    return this?.measuredWidth ?: def
-}
+val RecyclerView._dslAdapter: DslAdapter? get() = adapter as? DslAdapter?
 
 fun View.getChildOrNull(index: Int): View? {
     return if (this is ViewGroup) {
@@ -257,21 +337,4 @@ fun ViewGroup.eachChild(recursively: Boolean = false, map: (index: Int, child: V
             childAt.eachChild(recursively, map)
         }
     }
-}
-
-/**[androidx/core/animation/Animator.kt:82]*/
-inline fun Animator.addListener(
-    crossinline onEnd: (animator: Animator) -> Unit = {},
-    crossinline onStart: (animator: Animator) -> Unit = {},
-    crossinline onCancel: (animator: Animator) -> Unit = {},
-    crossinline onRepeat: (animator: Animator) -> Unit = {}
-): Animator.AnimatorListener {
-    val listener = object : Animator.AnimatorListener {
-        override fun onAnimationRepeat(animator: Animator) = onRepeat(animator)
-        override fun onAnimationEnd(animator: Animator) = onEnd(animator)
-        override fun onAnimationCancel(animator: Animator) = onCancel(animator)
-        override fun onAnimationStart(animator: Animator) = onStart(animator)
-    }
-    addListener(listener)
-    return listener
 }
